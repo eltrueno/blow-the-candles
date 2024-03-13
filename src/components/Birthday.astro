@@ -1,11 +1,13 @@
-<div class="cake-container" id="cake">
-
+<div class="flex w-full min-w-full px-10 py-2 align-middle items-center" id="topcontainer">
+    <div class="text-center w-full text-xl">Velas por soplar: <span id="candlestoblownspan" class="font-semibold"></span></div>
+</div>
+<div class="cake-container w-full" id="cake"/>
 <script>
 import * as THREE from 'three'
 
 const cakeRadius = 5
 const candleSpeed = 0.1
-const blowSpeed = 0.5
+const blowSpeed = 1.8
 
 const AGE = 24
 
@@ -14,12 +16,117 @@ let candlesCounterCont = 0
 let width = window.innerWidth
 let height = window.innerHeight
 
+
+function updateText(){
+    var e = document.getElementById("candlestoblownspan")
+    .innerText = ""+candlesCounterCont
+    if(candlesCounterCont==0){
+        happyBirthday();
+    }
+}
+
+function happyBirthday(){
+/*  TODO    */ 
+}
+
+function getFlameMaterial(isFrontSide){
+    let side = isFrontSide ? THREE.FrontSide : THREE.BackSide;
+    return new THREE.ShaderMaterial({
+      uniforms: {
+        time: {value: 0}
+      },
+      vertexShader: `
+        uniform float time;
+        varying vec2 vUv;
+        varying float hValue;
+
+        //https://thebookofshaders.com/11/
+        // 2D Random
+        float random (in vec2 st) {
+            return fract(sin(dot(st.xy,
+                                 vec2(12.9898,78.233)))
+                         * 43758.5453123);
+        }
+
+        // 2D Noise based on Morgan McGuire @morgan3d
+        // https://www.shadertoy.com/view/4dS3Wd
+        float noise (in vec2 st) {
+            vec2 i = floor(st);
+            vec2 f = fract(st);
+
+            // Four corners in 2D of a tile
+            float a = random(i);
+            float b = random(i + vec2(1.0, 0.0));
+            float c = random(i + vec2(0.0, 1.0));
+            float d = random(i + vec2(1.0, 1.0));
+
+            // Smooth Interpolation
+
+            // Cubic Hermine Curve.  Same as SmoothStep()
+            vec2 u = f*f*(3.0-2.0*f);
+            // u = smoothstep(0.,1.,f);
+
+            // Mix 4 coorners percentages
+            return mix(a, b, u.x) +
+                    (c - a)* u.y * (1.0 - u.x) +
+                    (d - b) * u.x * u.y;
+        }
+
+        void main() {
+          vUv = uv;
+          vec3 pos = position;
+
+          pos *= vec3(0.8, 2, 0.725);
+          hValue = position.y;
+          //float sinT = sin(time * 2.) * 0.5 + 0.5;
+          float posXZlen = length(position.xz);
+
+          pos.y *= 1. + (cos((posXZlen + 0.25) * 3.1415926) * 0.25 + noise(vec2(0, time)) * 0.125 + noise(vec2(position.x + time, position.z + time)) * 0.5) * position.y; // flame height
+
+          pos.x += noise(vec2(time * 2., (position.y - time) * 4.0)) * hValue * 0.0312; // flame trembling
+          pos.z += noise(vec2((position.y - time) * 4.0, time * 2.)) * hValue * 0.0312; // flame trembling
+
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(pos,1.0);
+        }
+      `,
+      fragmentShader: `
+        varying float hValue;
+        varying vec2 vUv;
+
+        // honestly stolen from https://www.shadertoy.com/view/4dsSzr
+        vec3 heatmapGradient(float t) {
+          return clamp((pow(t, 1.5) * 0.8 + 0.2) * vec3(smoothstep(0.0, 0.35, t) + t * 0.5, smoothstep(0.5, 1.0, t), max(1.0 - t * 1.7, t * 7.0 - 6.0)), 0.0, 1.0);
+        }
+
+        void main() {
+          float v = abs(smoothstep(0.0, 0.4, hValue) - 1.);
+          float alpha = (1. - v) * 0.99; // bottom transparency
+          alpha -= 1. - smoothstep(1.0, 0.97, hValue); // tip transparency
+          gl_FragColor = vec4(heatmapGradient(smoothstep(0.0, 0.3, hValue)) * vec3(0.95,0.95,0.4), alpha) ;
+          gl_FragColor.rgb = mix(vec3(0,0,1), gl_FragColor.rgb, smoothstep(0.0, 0.3, hValue)); // blueish for bottom
+          gl_FragColor.rgb += vec3(1, 0.9, 0.5) * (1.25 - vUv.y); // make the midst brighter
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.66, 0.32, 0.03), smoothstep(0.95, 1., hValue)); // tip
+        }
+      `,
+      transparent: true,
+      side: side
+    });
+  }
+
 document.addEventListener('DOMContentLoaded', () => {
 
+    //width = document.getElementById('topcontainer').offsetWidth;
+    //height = document.getElementById('topcontainer').offsetHeight;
+
+    let clock = new THREE.Clock();
+    let time = 0;
+
+    let flameMaterials = [];
+    let flameUUIDS = [];
 
     const scene = new THREE.Scene()
 
-    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000)
+    const camera = new THREE.PerspectiveCamera(75, width / height, 0.1, 1000)
     camera.position.set(0, cakeRadius * 1.5, cakeRadius * 2.3);
     camera.lookAt(new THREE.Vector3(0, 0, 0));
 
@@ -33,10 +140,60 @@ document.addEventListener('DOMContentLoaded', () => {
         camera.updateProjectionMatrix();
     }
 
+    if(width<768){
+        doZoom(0.6);
+    }
+
+    // candlewick
+    const candlewickProfile = new THREE.Shape();
+    candlewickProfile.absarc(0, 0, 0.0625, 0, Math.PI * 2);
+
+    const candlewickCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0.5, -0.0625),
+    new THREE.Vector3(0.25, 0.5, 0.125)
+    ]);
+
+    const candlewickGeo = new THREE.ExtrudeGeometry(candlewickProfile, {
+        steps: 8,
+        bevelEnabled: false,
+    extrudePath: candlewickCurve
+    });
+
+
+    function createCandleWick(){
+        var colors = [];
+        var color1 = new THREE.Color("black");
+        var color2 = new THREE.Color(0x994411);
+        var color3 = new THREE.Color(0xffff44);
+        for (let i = 0; i < candlewickGeo.attributes.position.count; i++){
+        if (candlewickGeo.attributes.position.getY(i) < 0.4){
+            color1.toArray(colors, i * 3);
+        }
+        else {
+            color2.toArray(colors, i * 3);
+        };
+        if (candlewickGeo.attributes.position.getY(i) < 0.15) color3.toArray(colors, i * 3);
+        }
+        candlewickGeo.setAttribute( 'color', new THREE.BufferAttribute( new Float32Array(colors), 3 ) );
+        //candlewickGeo.addAttribute( 'color', new THREE.BufferAttribute( new Float32Array(colors), 3 ) );
+        candlewickGeo.translate(0, 0.95, 0);
+        const candlewickMat = new THREE.MeshBasicMaterial({vertexColors: true});
+
+        var candlewickMesh = new THREE.Mesh(candlewickGeo, candlewickMat);
+
+        return candlewickMesh;
+    }
+
     window.addEventListener('resize', () => {
         // update display width and height
-        width = window.innerWidth
-        height = window.innerHeight
+        //width = window.innerWidth
+        //height = window.innerHeight
+        width = document.getElementById('cake').offsetWidth;
+        height = document.getElementById('cake').offsetHeight;
+
+        console.log(width)
+
         // update camera aspect
         camera.aspect = width / height
         camera.updateProjectionMatrix()
@@ -46,26 +203,18 @@ document.addEventListener('DOMContentLoaded', () => {
         renderer.render(scene, camera)
     })
 
-    function animateParticles() {
-        scene.traverse(function (object) {
-            if (object.isPoints) {
-                const positions = object.geometry.attributes.position.array;
-                for (let i = 0; i < positions.length; i += 3) {
-                    positions[i] += (Math.random() - 0.5) * 0.01;
-                    positions[i + 2] += (Math.random() - 0.5) * 0.01;
-                    if (positions[i + 1] > 2) {
-                        positions[i + 1] -= 0.03;
-                    } else {
-                        positions[i + 1] += Math.random() * 0.02 - 0.01;
-                    }
 
-                    if (positions[i + 1] < 0.75) {
-                        positions[i + 1] = 0.75;
-                    }
-                }
-                object.geometry.attributes.position.needsUpdate = true;
+    function animDynLight() {
+        
+        scene.traverse(function (object) {
+            if (object instanceof THREE.PointLight) {
+                object.position.x = Math.sin(time * Math.PI) * 0.25;
+                object.position.z = Math.cos(time * Math.PI * 0.75) * 0.25;
+                object.intensity = 2 + Math.sin(time * Math.PI * 2) * Math.cos(time * Math.PI * 1.5) * 0.25;
+                //object.geometry.attributes.position.needsUpdate = true;
             }
         })
+        
     }
 
     let candlesAnimated = []
@@ -79,12 +228,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let candlesBlown = []
     function blowCandle(candle) {
-        const particles = candle.children.find(child => child instanceof THREE.Points);
+        const flame = candle.children.find(child => flameUUIDS.includes(child.uuid));
         const dynamicFlameLight = candle.children.find(child => child instanceof THREE.PointLight);
-
+       
+        dynamicFlameLight.intensity = 1
         dynamicFlameLight.intensity -= blowSpeed
-        particles.position.z -= blowSpeed
-        particles.material.opacity -= blowSpeed
+        flame.position.z -= blowSpeed
+        flame.material.opacity -= blowSpeed
         if (dynamicFlameLight.intensity <= 0) {
             let disappear = setTimeout(()=>{
                 scene.remove(candle);
@@ -96,8 +246,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function animate() {
         requestAnimationFrame(animate);
+        time += clock.getDelta();
 
-        animateParticles()
+        animDynLight()
+
+        for(var i in flameMaterials){
+            var flame = flameMaterials[i];
+            try{
+                flame.uniforms.time.value = time;
+            }catch(err){
+
+            }
+        }
+
 
         if (candlesAnimated.length > 0) {
             const toRemove = []
@@ -148,34 +309,24 @@ document.addEventListener('DOMContentLoaded', () => {
         return `#${hexR}${hexG}${hexB}`;
     }
 
-    function createFire(num = 10, size = 0.3) {
-        const particleCount = num;
-        const particleGeometry = new THREE.BufferGeometry();
-        const particlePositions = [];
-        const particleColors = [];
 
-        for (let i = 0; i < particleCount; i++) {
-            const x = Math.random() * 0.3 - 0.15;
-            const y = 0.75 + Math.random() * 0.1;
-            const z = Math.random() * 0.3 - 0.15;
-            particlePositions.push(x, y, z);
 
-            const color = new THREE.Color(0xffcc00).lerp(new THREE.Color(0xff2200), Math.random());
-            particleColors.push(color.r, color.g, color.b);
-        }
+    // flame
+    function createFlame(){
+        
+        let flameGeo = new THREE.SphereGeometry(0.3, 32, 32);
+        flameGeo.translate(0, 0.5, 0);
+        let flameMat = getFlameMaterial(true);
+        flameMaterials.push(flameMat);
+        let flame = new THREE.Mesh(flameGeo, flameMat);
+        flameUUIDS.push(flame.uuid)
+        //flame.position.set(0.06, 1.2, 0.06);
+        var rad = (-45*(Math.PI/180));
+        flame.rotation.y = rad;
+        return flame;
 
-        particleGeometry.setAttribute('position', new THREE.Float32BufferAttribute(particlePositions, 3));
-        particleGeometry.setAttribute('color', new THREE.Float32BufferAttribute(particleColors, 3));
-
-        const particleMaterial = new THREE.PointsMaterial({
-            size: size,
-            vertexColors: true,
-            blending: THREE.AdditiveBlending
-        });
-
-        const particles = new THREE.Points(particleGeometry, particleMaterial);
-        return particles
     }
+
 
     function createCandle() {
         const candleGeometry = new THREE.CylinderGeometry(0.1, 0.08, 1.5, 12)
@@ -186,15 +337,73 @@ document.addEventListener('DOMContentLoaded', () => {
         })
         const candle = new THREE.Mesh(candleGeometry, candleMaterial)
 
-        const particles = createFire(10, 0.3)
-        candle.add(particles);
+        //const particles = createFire(10, 0.3)
+        //candle.add(particles);
 
-        const dynamicFlameLight = new THREE.PointLight(0xff8000, 1.5, 3);
-        dynamicFlameLight.position.set(0, 0, 0);
+        //const dynamicFlameLight = new THREE.PointLight(0xff8000, 1.5, 3);
+        const dynamicFlameLight = new THREE.PointLight(0xffaa33, 1.5, 5, 2);
+        dynamicFlameLight.position.set(0, 1.5, 0);
         candle.add(dynamicFlameLight);
-        particles.dynamicFlameLight = dynamicFlameLight;
+        //particles.dynamicFlameLight = dynamicFlameLight;
+
+        const wick = createCandleWick();
+        const flame = createFlame();
+        candle.add(dynamicFlameLight)
+        candle.add(wick);
+        candle.add(flame);
 
         return candle
+    }
+
+
+    const range = 2.5
+    var candlePositions = []
+    function getNewCandlePos(){
+        const radLimit = cakeRadius - 0.5
+
+        let ang, pos, x, z;
+
+        let okPos = false;
+        while(!okPos){
+            ang = Math.random() * Math.PI * 2
+            pos = Math.random() * radLimit
+
+            x = pos * Math.cos(ang)
+            z = pos * Math.sin(ang)
+
+            console.log(candlePositions)
+            /*var filteredPos = candlePositions.filter((el) => (x > el.x+range && x < el.x-range) || (z > el.z+range && z < el.z-range) );
+            if(filteredPos.length==0){
+                okPos = true;
+            }
+            console.log(filteredPos)
+            */
+           if(candlePositions.length==0){
+                okPos = true
+           }else{
+            for(var posn in candlePositions){
+                let cpos = candlePositions[posn]
+                console.log("cpos: "+cpos)
+                if((x-cpos.x < range || x-cpos.x < -range) || (z-cpos.z < range || x-cpos.x < -range)){
+                    console.log("YESS");
+                    okPos = true
+                    break;
+                }else console.log("NOPE")
+            }
+           }
+
+            console.log("x: "+x)
+            console.log("z: "+z)
+            /*for(var posn in candlePositions){
+                var cpos = candlePositions[posn];
+                
+            }*/
+
+        }
+
+        const newPos = {"x": x, "z":z}
+        candlePositions.push(newPos)      
+        return newPos
     }
 
     const cakeCont = document.getElementById('cake')
@@ -243,8 +452,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const cake = new THREE.Mesh(cakeGeometry, cakeMaterials)
     scene.add(cake)
 
-    let candlesCounter = AGE
+    let candlesCounter = AGE;
     let candles = []
+    candlesCounterCont = candlesCounter
+            updateText();
     for(var i=0; i<candlesCounter; i++){
         setTimeout(()=>{
             const radLimit = cakeRadius - 0.5
@@ -257,11 +468,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
             const newCandle = createCandle()
-            newCandle.position.set(x, cakeRadius + 5, z)
+            const p = getNewCandlePos();
+            newCandle.position.set(p.x, cakeRadius + 5, p.z)
 
             candles.push(newCandle)
-            candlesCounter += 1
-            candlesCounterCont = candlesCounter
+            //candlesCounter += 1
+
 
             candlesAnimated.push([newCandle, cakeRadius - cakeRadius / 3])
 
@@ -304,6 +516,7 @@ document.addEventListener('DOMContentLoaded', () => {
     function extinguishCandle(candle) {
         candlesCounter -= 1
         candlesCounterCont = candlesCounter
+        updateText();
         candlesBlown.push(candle)
     }
 
